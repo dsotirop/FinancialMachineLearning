@@ -39,11 +39,24 @@ from scipy.signal import detrend
 # =============================================================================
 # This function saves the current matplotlib figure to a PNG file.
 # =============================================================================
-def save_current_figure(filename):
+def save_figure(filename, figures_dir = "figures", fig_width=8, fig_height=6):
 
     # Input Arguments:
+    # figures_directoty: String representing the local directory where all 
+    #                    generated figures should be shaved.    
     # filename: String representing the name or path of the PNG file to save.
-    plt.savefig(filename, dpi=300, bbox_inches='tight')
+    
+    # Check if the 'figures' folder exists; if not, create it
+    if not os.path.exists(figures_dir):
+        os.makedirs(figures_dir)
+
+    # Retrieve current figure and set its size (in inches)
+    fig = plt.gcf()
+    fig.set_size_inches(fig_width, fig_height)
+
+    # Construct the full path and save the figure
+    full_path = os.path.join(figures_dir, filename)
+    plt.savefig(full_path, dpi=100, bbox_inches='tight')
     
 # =============================================================================
 # This function provides a two-dimensiional plot of a dependent series object 
@@ -93,6 +106,10 @@ def plot_series(df, series, day_min, day_max):
     else:
         plt.xticks(rotation=45)
     
+    # Save the current figure after setting the name of the image file.
+    png_filename = f"{series}_time_evolution.png"
+    save_figure(png_filename)
+    
     plt.show()
 
 # =============================================================================
@@ -109,7 +126,7 @@ def plot_series(df, series, day_min, day_max):
 # pattern every 1/f time units. Since we work with real-valued time series, we 
 # focus only on the positive frequencies to extract meaningful periodicities.
 # =============================================================================
-def fourier_analysis(series, sampling_rate=1):
+def fourier_analysis(series, series_name, sampling_rate=1):
         
     # Input Parameters:
     # - series (pd.Series): Time series data indexed by DatetimeIndex.
@@ -150,6 +167,10 @@ def fourier_analysis(series, sampling_rate=1):
     plt.ylabel("Magnitude")
     plt.legend()
     plt.grid()
+    
+    # Save the current figure after setting the name of the image file.
+    png_filename = f"{series_name}_fourier_spectrum.png"
+    save_figure(png_filename)
     plt.show()
     
     print(f"Dominant Period: {dominant_period:.2f} time units")
@@ -209,7 +230,7 @@ PositiveMagnitudes = []
 # the numeric data variables for the previously defined time period of days.
 numeric_columns = dataset.columns[dataset.dtypes != "object"]
 for series in numeric_columns:
-    dominant_period, pos_freq, pos_mag = fourier_analysis(dataset[series])
+    dominant_period, pos_freq, pos_mag = fourier_analysis(dataset[series], series)
     DominantPeriods.append(dominant_period)
     PositiveFrequencies.append(pos_freq)
     PositiveMagnitudes.append(pos_mag)
@@ -222,6 +243,7 @@ for series in numeric_columns:
 # dependent variables, it also shows the correlation among the independent  
 # variables. 
 
+
 # Create a copy of the dataset excluding the datetime series so that the 
 # pairwise correlations may be computed.
 df = dataset.drop("Date",axis=1)
@@ -229,10 +251,13 @@ df = dataset.drop("Date",axis=1)
 # Compute the pairwise correlations amongst the selected data series.
 correlation = df.corr()
 
+
 # Generate the respective heam map of correlations.
 plt.figure(figsize=(15,15))
 plt.title('Correlation Matrix')
 sns.heatmap(correlation, vmax=1, square=True,annot=True,cmap='cubehelix')
+# Save and show
+save_figure("correlation_matrix.png",fig_width=15, fig_height=15)
 plt.show()
 
 
@@ -240,4 +265,6 @@ plt.show()
 # given regression task.
 plt.figure(figsize=(15,15))
 scatter_matrix(dataset,figsize=(12,12))
+# Save and show
+save_figure("scatter_matrix.png",fig_width=12, fig_height=12)
 plt.show()
