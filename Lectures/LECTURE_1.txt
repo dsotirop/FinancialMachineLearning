@@ -1,3 +1,4 @@
 Create a Google Colab account: https://colab.research.google.com/
 Create a TwelveData account: https://twelvedata.com/
+(You may sign up with your gmail account)
 Login to your personal account: https://twelvedata.com/account and get your API KEY
