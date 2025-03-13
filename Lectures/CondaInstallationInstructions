@@ -1,1 +1,18 @@
+General instructions for the installation of Anaconda & Spyder on a Windows 11 platform.
 
+Step 1: Download latest version of Anaconda from https://www.anaconda.com/download/success
+Step 2: Run the Anaconda Navigator, find the Spyder application and install it on your system.
+Step 3: Run the Anaconda Prompt (pops up a new terminal window) and execute the following commands
+
+        Step 3.1:  conda create -n python_3_10 python=3.10 anaconda  [This creates a new conda virtual enviroment for Python 3.10]
+        Step 3.2:  conda env list [Check that the virtual enviroment python_3_10 is in the list of available virtual enviroments]
+        Step 3.3:  conda activate python_3_10 [Activate the newly created virtual enviroment]
+        Step 3.4:  conda install spyder-kernels=2.5 [Install the spyder kernel which is required to run the Spyder console]
+        Step 3.5:  conda install  tensorflow [Install the Tensorflow Python library]
+        Step 3.5:  conda deactivate [Deactivate the python_3_10 virtual environment]
+
+
+Step 4: Run the Spyder Application and when it opens go to the Tools > Preferences Menu
+        Select Python Interpreter from the list on the left
+        Select "Use the following Python interpreter" and browse to the corresponding directory on your system
+        i.e. C:/Users/user_name/anaconda3/envs/python_3_10/python.exe [user_name: stands for your user name]
