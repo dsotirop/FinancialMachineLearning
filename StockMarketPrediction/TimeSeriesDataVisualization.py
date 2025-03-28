@@ -5,11 +5,12 @@
 # =============================================================================
 
 # =============================================================================
-# In this case study, the weekly return of Microsoft stock is the predicted 
-# variable. We need to understand what affects Microsoft stock price and 
-# incorporate as much information into the model. For this case study, other 
-# than the historical data of Microsoft, the independent variables used are the 
-# following potentially correlated assets:
+# In this case study, the closing value of a given stock, currency or index at 
+# given time in the future can be the predicted variable. 
+# We need to understand what affects each given stock, currency or index price 
+# and incorporate as much information into the model. For this case study,  
+# dependent and independent variables may be selected from the following list  
+# of potentially correlated assets:
 #
 # (1) Stocks:   IBM (IBM) and Alphabet (GOOGL)
 # (2) Currency: USD/JPY and GBP/USD
@@ -182,13 +183,21 @@ def fourier_analysis(series, series_name, sampling_rate=1):
 #                   MAIN CODE SECTION:
 # =============================================================================
 
+# =============================================================================
+# IMPORTANT NOTE: KEEP IN MIND THAT THE IMPLEMENTED VISUALIZATION PROCESS IS
+#                 ONLY MEENINGFULL FOR MULTI-SERIES DATAFRAMES WHERE A GIVEN
+#                 TARGET REGRESSION VARIABLE IS CONSIDERED ALONG THE NON-LAGGED
+#                 VERSION OF THE REST INDEPENDENT REGRESSION VARIABLES. 
+# =============================================================================
+
+
 # ============================================================================= 
 # Load Main Dataframe.
 # =============================================================================
 
 # Set the name of the data directory.
 data_directory = './data'
-data_file = 'time_series_data.csv'
+data_file = 'MSFT_multi_time_series_data.csv'
 
 # Construct the f ull data path
 data_path = os.path.join(data_directory,data_file)
@@ -211,10 +220,18 @@ day_min, day_max = 1, 300
 
 # Loop through the various series objects and plot the time evolution of the
 # numeric data variables for the previously defined time period of days.
-numeric_columns = dataset.columns[dataset.dtypes != "object"]
-for series in numeric_columns:
-    plot_series(dataset,series,day_min,day_max)
 
+# =============================================================================
+# IMPORTANT NOTE: WE NEED TO KEEP ALL THE NON-LAGGED VERSIONS OF THE RESPECTIVE
+#                 SERIES OBJECTS. THAT IS THE VISUALIZATION PROCESS WILL ONLY 
+#                 FOCUS ON THE SERIES OBJECTS AT TIME t = 0.
+# ============================================================================= 
+
+
+numeric_columns = dataset.columns[dataset.dtypes != "object"]
+non_lagged_columns =  [col for col in numeric_columns if col.endswith("_t-0")]
+for series in non_lagged_columns:
+    plot_series(dataset,series,day_min,day_max)
 
 # ============================================================================= 
 # Visualize Time Series Dataset in the Frequency Domain.
@@ -228,8 +245,7 @@ PositiveMagnitudes = []
 
 # Loop through the various series objects and plot the frequency spectrogram of 
 # the numeric data variables for the previously defined time period of days.
-numeric_columns = dataset.columns[dataset.dtypes != "object"]
-for series in numeric_columns:
+for series in non_lagged_columns:
     dominant_period, pos_freq, pos_mag = fourier_analysis(dataset[series], series)
     DominantPeriods.append(dominant_period)
     PositiveFrequencies.append(pos_freq)
@@ -244,9 +260,10 @@ for series in numeric_columns:
 # variables. 
 
 
-# Create a copy of the dataset excluding the datetime series so that the 
-# pairwise correlations may be computed.
-df = dataset.drop("Date",axis=1)
+# Create a copy of the dataset excluding the datetime series and all the lagged
+# versions of the dependent and independent regression variables so that the 
+# pairwise correlations may be computed and are meaningful.
+df = dataset.filter(items=non_lagged_columns)
 
 # Compute the pairwise correlations amongst the selected data series.
 correlation = df.corr()
@@ -264,7 +281,7 @@ plt.show()
 # Visualize the pairwise scatter plots for the variables pertaining to the 
 # given regression task.
 plt.figure(figsize=(15,15))
-scatter_matrix(dataset,figsize=(12,12))
+scatter_matrix(df,figsize=(15,15))
 # Save and show
 save_figure("scatter_matrix.png",fig_width=12, fig_height=12)
 plt.show()
