@@ -5,11 +5,12 @@
 # =============================================================================
 
 # =============================================================================
-# In this case study, the weekly return of Microsoft stock is the predicted 
-# variable. We need to understand what affects Microsoft stock price and 
-# incorporate as much information into the model. For this case study, other 
-# than the historical data of Microsoft, the independent variables used are the 
-# following potentially correlated assets:
+# In this case study, the closing value of a given stock, currency or index at 
+# given time in the future can be the predicted variable. 
+# We need to understand what affects each given stock, currency or index price 
+# and incorporate as much information into the model. For this case study,  
+# dependent and independent variables may be selected from the following list  
+# of potentially correlated assets:
 #
 # (1) Stocks:   IBM (IBM) and Alphabet (GOOGL)
 # (2) Currency: USD/JPY and GBP/USD
@@ -20,12 +21,12 @@
 # The dataset used for this case study is extracted from https://twelvedata.com/
 # You make create a free account and request the respective API KEY by accessing
 # the url: https://twelvedata.com/account
-# We will use the daily closing price of the last 14 years, from 2010 onward.
+# We will use the daily closing price of the last 14 years, from 2010 onward. 
+# =============================================================================
 
 # Import required Python modules.
 import os
 import pickle
-import numpy as np
 import pandas as pd
 
 # ============================================================================= 
@@ -115,6 +116,127 @@ def synchronize_dataframes(collected_data):
 
     return collected_data
 
+# =============================================================================
+# This function transforms a time-series DataFrame into a supervised learning 
+# dataset.
+# =============================================================================
+def create_supervised_dataset(df, target_col, future_dt, past_dt, multiseries=False):
+    
+    
+    # Input Arguments:
+    # df : Original time-series DataFrame, which may have a column named 'Date',
+    #      plus other columns for asset prices, indices, etc.
+    # target_col : String representing the name of the column whose future value 
+    #              will be predicted.
+    # future_dt : Integer representing the number of future time steps upon which
+    #             predictin will be performed. E.g., future_dt=1 means predict 
+    #             the value at t+1 using data up to time t.
+    # past_dt : Integer representing the number of past time steps that will be
+    #           utilized as features. E.g., past_dt=2 means each row uses values 
+    #           at [t, t-1, t-2].
+    # multiseries : Boolean value indicating whether lagged features will be 
+    #               generated only for the target column. If False, only the 
+    #               target column will be utilized to generate lagged features.
+
+        
+    # Output Arguments:
+    # supervised_df : A new DataFrame such that:
+    #    - The first column is the future target (Y), 
+    #      i.e. target_col shifted by -future_dt.
+    #    - The next columns are the lagged features:
+    #        * If multiseries=True, lagged features are created for every column 
+    #          except 'Date'.
+    #        * If multiseries=False, lagged features are created only for target_col.
+    #    - The original 'Date' column is retained (unlagged) so you can identify 
+    #      each row's date.
+    #    - Rows with insufficient history or missing future values are dropped.
+    
+    # ------------------------------------------------------------------------
+    # Extract and remove the 'Date' column (if present) so we don't generate lags for it
+    # ------------------------------------------------------------------------
+    date_series = df['Date'].copy() if 'Date' in df.columns else None
+    
+    # ------------------------------------------------------------------------
+    # Create the target (Y) by shifting target_col backwards by future_dt
+    # ------------------------------------------------------------------------
+    y = df[target_col].shift(-future_dt)
+    y.name = f"{target_col}_t+{future_dt}"  # e.g., 'MSFT_t+5'
+    
+    # ------------------------------------------------------------------------
+    # Determine which columns to lag
+    # ------------------------------------------------------------------------
+    # If multiseries=True, use every column except 'Date'.
+    # If multiseries=False, use only the target_col.
+    if multiseries:
+        columns_to_lag = [c for c in df.columns if c != 'Date']
+    else:
+        columns_to_lag = [target_col]  # Only the target column
+    
+    # ------------------------------------------------------------------------
+    # Generate lagged features
+    # ------------------------------------------------------------------------
+    lagged_features = []
+    for col in columns_to_lag:
+        # Generate lagged columns for col from 0..past_dt
+        for lag in range(past_dt + 1):
+            col_lag_name = f"{col}_t-{lag}"
+            lagged_col = df[col].shift(lag).rename(col_lag_name)
+            lagged_features.append(lagged_col)
+    
+    # ------------------------------------------------------------------------
+    # Combine target and lagged features
+    # ------------------------------------------------------------------------
+    supervised_df = pd.concat([y] + lagged_features, axis=1)
+    
+    # ------------------------------------------------------------------------
+    # Drop rows with NaN (from shifting) BEFORE reintroducing 'Date'
+    # ------------------------------------------------------------------------
+    supervised_df.dropna(inplace=True)
+    
+    # ------------------------------------------------------------------------
+    # Reintroduce the 'Date' column (unlagged) so each row has a date
+    # ------------------------------------------------------------------------
+    if date_series is not None:
+        supervised_df['Date'] = date_series
+    
+    # ------------------------------------------------------------------------
+    # Reorder columns so the final DataFrame is [Date, Target, Features...]
+    # ------------------------------------------------------------------------
+    if 'Date' in supervised_df.columns:
+        col_order = ['Date', y.name] + [c for c in supervised_df.columns 
+                                        if c not in ('Date', y.name)]
+        supervised_df = supervised_df[col_order]
+    
+    # Reset index.
+    supervised_df = supervised_df.reset_index(drop=True)
+    
+    return supervised_df
+
+# =============================================================================
+# This function saves a given time-series DataFrame into the designate .csv 
+# file.
+# =============================================================================
+def save_dataframe(df, data_directory, datafile):
+    
+    # Input Arguments:
+    # -df: Dataframe to be save into a .csv file.
+    # -data_directory: String representing the location of the .csv file.
+    # -data_file: String representing the name of the data file.
+    
+    # Check if the directory exists, if not, create it.
+    if not os.path.exists(data_directory):
+        os.makedirs(data_directory)
+        print(f"Directory '{data_directory}' created.")
+    else:
+        print(f"Directory '{data_directory}' already exists.")
+
+    # Construct the full data path
+    data_path = os.path.join(data_directory,datafile)
+
+    # Save the DataFrame to the file
+    df.to_csv(data_path, index=False)
+    print(f"DataFrame saved to '{data_path}'")
+
 # ============================================================================= 
 #                   MAIN CODE SECTION:
 # =============================================================================
@@ -140,114 +262,67 @@ synchronize_dataframes(collected_data)
 #                   GENERATE MAIN DATAFRAME.
 # =============================================================================
 
-# The predicted variable Y is the weekly return of Microsoft (MSFT). The number 
-# of trading days in a week is assumed to be five, and we compute the return 
-# using five trading days.
+# -----------------------------------------------------------------------------
+# Step 1: Create a dictionary to hold each "Close" series.
+# -----------------------------------------------------------------------------
 
-# Initially set the time period based on which the return values will be 
-# computed
-return_period = 5
+close_data = {}
 
-# Set the dependent variable to be predicted as the daily closing value of the 
-# Microsoft stock. Mind that the [["close"]] slicing returns a dataframe object
-# and not a series object.
-Y = collected_data["stocks"]["MSFT"][["close"]]
+# Step 2: Traverse the nested dictionary and extract the "Close" column from each DataFrame.
+for category, sub_dict in collected_data.items():
+    for ticker, df in sub_dict.items():
+        # Extract the 'Close' column and store it under the key = ticker
+        close_data[ticker] = df['close']
 
-# Convert the acquired values in log scale, compute the correponding weekly 
-# returns and shift the available time series data towards the past so that 
-# the last return_period values are equal to NaN.
-Y = np.log(Y).diff(return_period).shift(-return_period)
-
-# The variables used as independent variables are lagged five-day return of 
-# stocks (IBΜ and GOOGLE), currencies (USD/JPY) and GBP/USD), and indices 
-# (S&P 500, Dow Jones, and NASDAQ), along with lagged 5-day, 15-day, 30-day and 
-# 60-day return of MSFT.
-
-# Retrieve the IBM and GOOGLE closing stock values for the same time
-# period and combine them into a dataframe object for further pre-processing.
-X_ibm = collected_data["stocks"]["IBM"]["close"]
-X_google = collected_data["stocks"]["GOOGL"]["close"]
-X1 = pd.concat([X_ibm,X_google],axis=1)
-
-# Convert the acquired values in log scale and compute the 
-# corresponding weekly returns.
-X1 = np.log(X1).diff(return_period)
-
-# Retrieve the closing values for the JPY/USD and GBP/USD currencies for the 
-# same time period and combine them into a dataframe object for further 
-# pre-processing.
-X_usdjpy = collected_data["currencies"]["USD/JPY"]["close"]
-X_gbpusd = collected_data["currencies"]["GBP/USD"]["close"]
-X2 = pd.concat([X_usdjpy,X_gbpusd],axis=1)
-
-# Convert the acquired values in log scale and compute the corresponding weekly
-# returns.
-X2 = np.log(X2).diff(return_period)
-
-# Retrieve the closing values for the SP500, DOWJONES and NASDAQ indices for the 
-# same time period and combine them into a dataframe object for further 
-# pre-processing.
-X_sp500 = collected_data["indices"]["SPY"]["close"]
-X_dowjones = collected_data["indices"]["DIA"]["close"]
-X_nasdaq = collected_data["indices"]["QQQ"]["close"]
-X3 = pd.concat([X_sp500,X_dowjones,X_nasdaq],axis=1)
-
-# Convert the acquired values in log scale and compute the corresponding weekly
-# returns.
-X3 = np.log(X3).diff(return_period)
-
-# Generate the lagged returns of the MSFT stock.
-Xo = collected_data["stocks"]["MSFT"]["close"]
-Xo = np.log(Xo)
-X4 = [Xo.diff(i*return_period) for i in [1,3,6,12]]
-# Concatenate the lagged MSFT stock closing values into a dataframe.
-X4 = pd.concat(X4,axis=1)
-
-# Concatenate all independent variables into a unified dataframe.
-X = pd.concat([X1,X2,X3,X4],axis=1)
-
-# Generate the complete dataframe by concatenating the dependent variables with
-# the independent ones into a single dataframe by excluding the NaN values.
-dataset = pd.concat([Y,X],axis=1).dropna()
+# Step 3: Build a single DataFrame that contains all the "Close" columns for all 
+#         tickers.
+combined_df = pd.DataFrame(close_data)
 
 # Set the names for the columns for the complete dataset.
-# Nasdaq Composite Index often appears under the ticker symbol “IXIC”.
+# • Nasdaq Composite Index often appears under the ticker symbol “IXIC”.
 # • DEXUSJP corresponds to the U.S. Dollar to Japanese Yen exchange rate.
 # • DEXUSUK corresponds to the U.S. Dollar to British Pound exchange rate.
-column_names = ["MSFT","IBM","GOOGL","DEXUSJP","DEXUSUK",
-"SP500","DJIA","IXIC","MSFT_DT","MSFT_3DT","MSFT_6DT","MSFT_12DT"]
-dataset.columns = column_names
+column_names = ["MSFT","IBM","GOOGL","DEXUSJP","DEXUSUK","SP500","DJIA","IXIC"]
+combined_df.columns = column_names
 
-# Convert the existing DateTimeIndex into a column named 'Date' and
-# switch to a regular integer index:
-dataset = dataset.reset_index().rename(columns={'datetime': 'Date'})
+# -----------------------------------------------------------------------------
+# Step 4: Convert the existing DateTimeIndex into a column named 'Date' and
+#         switch to a regular integer index:
+# -----------------------------------------------------------------------------
 
-# Take into consideration that the first series object will be the target
-# variable while the rest series objects will be the independent variables 
-# upon which the target variable will be predicted.
+combined_df = combined_df.reset_index().rename(columns={'datetime': 'Date'})
 
-# ============================================================================= 
-#                   SAVE TIME SERIES DATASET:
-# ============================================================================= 
+# -----------------------------------------------------------------------------
+# Step 5: Create and save the supervised learning dataframes for each column of 
+#         the  combined dataframe excluding the Date series.
+# -----------------------------------------------------------------------------
 
-# ============================================================================= 
-# PHASE III: Save Main Dataframe.
-# =============================================================================
-
+# Set the future dt.
+future_dt = 1
+# Set the past dt.
+past_dt = 200
 # Set the name of the data directory.
 data_directory = './data'
-data_file = 'time_series_data.csv'
 
-# Check if the directory exists, if not, create it.
-if not os.path.exists(data_directory):
-    os.makedirs(data_directory)
-    print(f"Directory '{data_directory}' created.")
-else:
-    print(f"Directory '{data_directory}' already exists.")
-
-# Construct the full data path
-data_path = os.path.join(data_directory,data_file)
-
-# Save the DataFrame to the file
-dataset.to_csv(data_path, index=False)
-print(f"DataFrame saved to '{data_path}'")
+# Loop through the various columns of the combined dataframe excluding the Date
+# series.
+columns_to_process = [c for c in combined_df.columns if c != 'Date']
+for target_col in columns_to_process:
+    
+    # Create the dataset that contains only lagged versions of the target
+    # regression variable.
+    dataset = create_supervised_dataset(combined_df, target_col, future_dt, 
+                                        past_dt)
+    
+    # Create the dataset that contains lagged versions of both the target and
+    # the independent regression variables.
+    multi_dataset = create_supervised_dataset(combined_df, target_col, future_dt, 
+                                              past_dt, multiseries=True)
+    
+    # Save the target regression variable specific dataset to file.
+    data_file = f"{target_col}_time_series_data.csv"
+    save_dataframe(dataset, data_directory, data_file)
+    
+    # Save the multi-series target regression variable specific dataset to file.
+    multi_data_file = f"{target_col}_multi_time_series_data.csv"
+    save_dataframe(multi_dataset, data_directory, multi_data_file)
