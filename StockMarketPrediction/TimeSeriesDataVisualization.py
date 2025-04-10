@@ -32,7 +32,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from pandas.plotting import scatter_matrix
 from scipy.signal import detrend
-
+from statsmodels.graphics.tsaplots import plot_acf
+from auxiliary.utils import perform_clustering
 # ============================================================================= 
 #                   FUNCTIONS DEFINITION SECTION:
 # =============================================================================
@@ -127,16 +128,23 @@ def plot_series(df, series, day_min, day_max):
 # pattern every 1/f time units. Since we work with real-valued time series, we 
 # focus only on the positive frequencies to extract meaningful periodicities.
 # =============================================================================
-def fourier_analysis(series, series_name, sampling_rate=1):
+def fourier_analysis(series, series_name, return_period=10,sampling_rate=1):
         
     # Input Parameters:
     # - series (pd.Series): Time series data indexed by DatetimeIndex.
+    # - series_name: String representing the name of the respective column.
+    # - return_period: Integer value representing the future time window dt upon
+    #                  which the price return will be computed as :
+    #                  R(t) = P(t+dt)-P(t)
     # - sampling_rate (float): The rate at which data points are sampled (default: 1 per day).
 
     # Output Parameters:
     # - dominant_period (float): The estimated dominant periodicity.
     # - freq (np.array): Array of frequency values.
     # - magnitude (np.array): Magnitude of Fourier Transform at each frequency.
+    
+    # Step 0: Compute the loged version of the time series.
+    series = np.log(series).diff(return_period)
     
     # Step 1: Detrend the time series (to remove long-term trends)
     series_detrended = detrend(series.dropna())  # Remove trend
@@ -187,7 +195,7 @@ def fourier_analysis(series, series_name, sampling_rate=1):
 # IMPORTANT NOTE: KEEP IN MIND THAT THE IMPLEMENTED VISUALIZATION PROCESS IS
 #                 ONLY MEENINGFULL FOR MULTI-SERIES DATAFRAMES WHERE A GIVEN
 #                 TARGET REGRESSION VARIABLE IS CONSIDERED ALONG THE NON-LAGGED
-#                 VERSION OF THE REST INDEPENDENT REGRESSION VARIABLES. 
+#                 VERSIONS OF THE REST INDEPENDENT REGRESSION VARIABLES. 
 # =============================================================================
 
 
@@ -216,7 +224,7 @@ print(f"Dataset spans a time period of {days_num} days")
 # =============================================================================
 
 # Plot the first 300 days of observations for each series.
-day_min, day_max = 1, 300
+day_min, day_max = 1, 500
 
 # Loop through the various series objects and plot the time evolution of the
 # numeric data variables for the previously defined time period of days.
@@ -285,3 +293,22 @@ scatter_matrix(df,figsize=(15,15))
 # Save and show
 save_figure("scatter_matrix.png",fig_width=12, fig_height=12)
 plt.show()
+
+# Visualize the autocorrelation of the target series with its lagged versions.
+# • Each vertical bar represents the autocorrelation at a specific lag 
+#  (on the x-axis).
+# • Dashed Lines (Confidence Intervals): These horizontal lines (typically at 
+#   ±1.96/√N for a 95% confidence interval) represent the range within which 
+#   the autocorrelation values are expected to fall if the series were random 
+#   (i.e., no autocorrelation).
+series_name = dataset.columns[2]
+series = dataset[series_name]
+plot_acf(series, lags=400)
+plt.show()
+
+# Clustering Experimentation.
+dates = dataset["Date"]
+series = dataset["MSFT_t-0"]
+cluster_info_df, clusters_df = perform_clustering(series, dates, 
+                                                  n_lags=200, n_clusters=3, 
+                                                  n_init=200, thresholds=None)
