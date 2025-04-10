@@ -5,9 +5,182 @@
 import matplotlib.pyplot as plt
 import torch
 import numpy as np
+import pandas as pd
+from sklearn.cluster import KMeans
+from sklearn.metrics.pairwise import pairwise_distances
+from sklearn.preprocessing import StandardScaler
+import scipy.stats as stats
 # ============================================================================= 
 #                   HELPER FUNCTIONS DEFINITION SECTION:
 # =============================================================================
+
+# Function to generate lagged features from the time series
+def create_lagged_features(series, n_lags):
+
+    # Input Arguments:
+    # - series: a pandas.Series object representing the input time series to  
+    #           create lagged features from.
+    # - n_lags: an int representing the number of lags to generate.
+    
+    # Output Arguments:
+    # - lagged_data: a numpy.ndarray where each row is a set of lagged values 
+    #                for a given time point.
+    
+    lagged_data = []
+    for i in range(n_lags, len(series)):
+        lagged_data.append(series[i - n_lags:i].values)
+    lagged_data = np.array(lagged_data)
+    return lagged_data
+
+# Function to characterize a given cluster based on its statistical properties.
+def characterize_cluster(mean, variance, skewness, kurtosis, thresholds):
+
+    # Input Arguments:
+    # - mean: float represening the mean of the cluster.
+    # - variance: float representing the variance of the cluster.
+    # - skewness: float representing the skewness of the cluster.
+    # - kurtosis: float representing the kurtosis of the cluster.
+    # - thresholds: dictionary containing customizable thresholds for mean, 
+    #               variance, skewness, and kurtosis.
+    
+    # Output Arguments:
+    # - cluster_type: A string describing the cluster type.
+    
+    # Get customizable thresholds from the dictionary
+    var_thresh = thresholds.get('variance', 0.1)
+    mean_thresh = thresholds.get('mean', 0.1)
+    skew_thresh = thresholds.get('skewness', 1)
+    kurt_thresh = thresholds.get('kurtosis', 3)
+    
+    # Characterize cluster based on thresholds
+    if variance < var_thresh:
+        cluster_type = "Stable"
+    elif mean > mean_thresh and skewness < 0:
+        cluster_type = "Growth"
+    elif mean < -mean_thresh and skewness > 0:
+        cluster_type  = "Decline"
+    elif kurtosis > kurt_thresh:
+        cluster_type =  "Volatile"
+    elif abs(skewness) > skew_thresh:
+        cluster_type = "Skewed"
+    else:
+        cluster_type = "Normal"
+    
+    # Return the identfied type of cluster.
+    return cluster_type
+
+# Function to perform clustering using DTW and generate the cluster information
+def perform_clustering(series, dates, n_lags, n_clusters=3, n_init=200,
+                       thresholds=None):
+
+    
+    # Input Arguments:
+    # - series: a pandas.Series representing the time series to cluster.
+    # - dates: a pandas.Series representing the corresponding dates for the time 
+    #          series data points.
+    # - n_lags: an integer value representing the number of lags to generate as 
+    #           features.
+    # - n_clusters: an integer value representing the number of clusters to create.
+    # - n_init: an integer value indicating the number of re-runs for each instance
+    #           of the k-means algorithm.
+    # - thresholds: an optional dictionary object containing customizable thresholds 
+    #               for mean, variance, skewness, and kurtosis to characterize each 
+    #               cluster.
+    
+    # Output Arguments:
+    # - clusters: A pandas.DataFrame containing the cluster assignments, 
+    #             start/end times, basic statistics of each cluster,
+    #             and a textual characterization of the cluster.
+   
+    # Use default thresholds if none provided
+    if thresholds is None:
+        thresholds = {'variance': 0.1, 'mean': 0.1, 'skewness': 1, 'kurtosis': 3}
+    
+    # Generate lagged features
+    X = create_lagged_features(series, n_lags)
+    
+    # Make sure the series object is defined on the same time range.
+    series = series[n_lags:]
+
+    # Normalize the data (Standardization)
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+
+    # Compute the pairwise distance matrix using Pearson correlation
+    dist_matrix = pairwise_distances(X_scaled, metric='correlation')
+
+    # Perform KMeans clustering using the Pearson correlation distance matrix
+    kmeans = KMeans(n_clusters=n_clusters, n_init=n_init, random_state=42,
+                    verbose=1)
+    cluster_labels = kmeans.fit_predict(dist_matrix)
+
+    # Create a DataFrame to hold the clustering results
+    clusters_df = pd.DataFrame({
+        'Date': dates[n_lags:],  # dates corresponding to the time steps
+        'Cluster': cluster_labels
+    })
+
+    # Adding basic statistics for each cluster
+    cluster_stats = []
+    for cluster_id in range(n_clusters):
+        cluster_data = series[cluster_labels == cluster_id]
+        start_date = clusters_df[clusters_df['Cluster'] == cluster_id]['Date'].iloc[0]
+        end_date = clusters_df[clusters_df['Cluster'] == cluster_id]['Date'].iloc[-1]
+        mean = np.mean(cluster_data)
+        variance = np.var(cluster_data)
+        skewness = stats.skew(cluster_data)
+        kurtosis = stats.kurtosis(cluster_data)
+        # Add cluster description based on stats and adjustable thresholds
+        cluster_description = characterize_cluster(mean, variance, skewness, kurtosis, thresholds)
+        cluster_stats.append({
+            'Cluster': cluster_id,
+            'Start Date': start_date,
+            'End Date': end_date,
+            'Mean': mean,
+            'Variance': variance,
+            'Skewness': skewness,
+            'Kurtosis': kurtosis,
+            'Characterization': cluster_description
+        })
+    
+    cluster_info_df = pd.DataFrame(cluster_stats)
+    
+    # Use the dark theme for the plot
+    plt.style.use('dark_background')
+
+    # Visualization of the clusters in separate windows with grid
+    for cluster_id in range(n_clusters):
+        plt.figure(figsize=(12, 6))  # Create a new figure for each cluster
+        cluster_data = series[cluster_labels == cluster_id]
+        cluster_dates = clusters_df[clusters_df['Cluster'] == cluster_id]['Date']
+    
+        plt.plot(cluster_dates, cluster_data, label=f"Cluster {cluster_id}",
+                 color='red')
+        plt.title(f"Time Series Clustering - Cluster {cluster_id} (Pearson Correlation)")
+        plt.xlabel("Date")
+        plt.ylabel("Value")
+    
+        # Dynamically calculate the step size based on the number of observations
+        num_dates = len(cluster_dates)  # Total number of dates/observations in this cluster
+        max_ticks = 10  # Maximum number of x-ticks you want to display
+
+        # Calculate the step size based on the number of observations and max_ticks
+        step_size = max(1, num_dates // max_ticks)  # Ensure step size is at least 1
+
+        # Set the x-ticks to every `step_size`-th date
+        date_ticks = cluster_dates[::step_size]
+        plt.xticks(date_ticks, rotation=45)  # Rotate x-tick labels by 45 degrees
+
+        # Display grid and set grid style
+        plt.grid(True, linestyle='--', linewidth=0.5, color='white')  # White grid on dark background
+    
+        # Add legend
+        plt.legend()
+    
+        # Show the plot for the current cluster
+        plt.show()
+    
+    return cluster_info_df, clusters_df
 
 # Define a function to get the correct training environemnt for the model.
 def get_execution_device():
