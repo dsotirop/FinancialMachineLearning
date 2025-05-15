@@ -25,263 +25,405 @@
 # =============================================================================
 
 # Import required Python modules.
-import pandas as pd
-import numpy as np
 import os
-import matplotlib.pyplot as plt
-import seaborn as sns
-from pandas.plotting import scatter_matrix
-from scipy.signal import detrend
+import pandas as pd
+from sklearn.preprocessing import StandardScaler
+import torch
+from torch.utils.data import Dataset, DataLoader
+from torch import nn
+import torch.optim as optim
+import numpy as np
+from auxiliary.utils import get_execution_device, plot_predictions, plot_training_history
 
 # ============================================================================= 
-#                   FUNCTIONS DEFINITION SECTION:
+#                   CLASSES DEFINITION SECTION:
 # =============================================================================
 
+# This class provides fundamental functionality for the implementation of a 
+# simple Dataset for time series data that does not allow random shuffling.
+# Each item is a single (features, target) pair at a given time index.
+class TimeSeriesDataset(Dataset):
+
+    def __init__(self, X, y, device):
+        
+        # Input Arguments:
+        #    X (np.ndarray or Tensor): shape (N, num_features)
+        #    y (np.ndarray or Tensor): shape (N,) or (N, 1)
+        #    device (torch.device): the device on which tensors will be placed.
+        
+        # Convert to tensors and move to device
+        if not torch.is_tensor(X):
+            X = torch.tensor(X, dtype=torch.float32)
+        # Ensure y is 2D for regression: (N, 1)
+        if not torch.is_tensor(y):
+            y = torch.tensor(y, dtype=torch.float32).view(-1, 1)
+
+        self.X = X.to(device)
+        self.y = y.to(device)
+
+    def __len__(self):
+        return len(self.X)
+
+    def __getitem__(self, idx):
+        return self.X[idx], self.y[idx]
+
+# This class provides the implementation of a simple multi-layer perceptron.
+class MLP(nn.Module):
+    def __init__(self, input_dim, hidden_layers, dropout_prob=0.2):
+        
+
+        # Input Arguments:
+        #    input_dim (int): Size of the input features.
+        #    hidden_layers (list of int): List containing the size of each hidden layer,
+        #                                 e.g. [64, 32].
+        #    dropout_prob (float): Probability of dropping out neurons after
+        #                          each hidden layer. Default: 0.2
+        super(MLP, self).__init__()
+        layers = []
+        # Start with the input dimension
+        in_features = input_dim
+
+        # Add hidden layers
+        for hidden_size in hidden_layers:
+            layers.append(nn.Linear(in_features, hidden_size))
+            layers.append(nn.Sigmoid()) # Or nn.ReLU()
+            layers.append(nn.Dropout(p=dropout_prob))  # <-- Dropout added here
+            in_features = hidden_size
+
+        # Output layer (1 neuron for regression)
+        layers.append(nn.Linear(in_features, 1))
+
+        self.network = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.network(x)
+
+# This class provides the implementation of a simple linear neural network where
+# its output is formed as a weighted average of the input features plus the bias
+# term: F(x) = W*x + b
+class LinearNN(nn.Module):
+
+    def __init__(self, input_dim):
+        
+        # Input Arguments:
+        # input_dim: Integer indicating the size of the input features.
+        
+        super(LinearNN, self).__init__()
+        # A single linear layer from input_dim to 1
+        self.linear = nn.Linear(input_dim, 1)
+
+    def forward(self, x):
+        
+        # This function implements the forward pass through the linear layer.
+
+        # Input Arguments:
+        # x (torch.Tensor): Input tensor of shape (batch_size, input_dim).
+        # Output Arguments:
+        # torch.Tensor: Output tensor of shape (batch_size, 1).
+
+        return self.linear(x)
+
+# ============================================================================= 
+#                   TRAINING / TESING FUNCTIONS DEFINITION SECTION:
 # =============================================================================
-# This function saves the current matplotlib figure to a PNG file.
-# =============================================================================
-def save_figure(filename, figures_dir = "figures", fig_width=8, fig_height=6):
+
+# Define the function that performs the training of the neural network model.
+def train_model(model, train_loader, test_loader, criterion, optimizer, epochs):
 
     # Input Arguments:
-    # figures_directoty: String representing the local directory where all 
-    #                    generated figures should be shaved.    
-    # filename: String representing the name or path of the PNG file to save.
-    
-    # Check if the 'figures' folder exists; if not, create it
-    if not os.path.exists(figures_dir):
-        os.makedirs(figures_dir)
+    # - model (nn.Module): The instance of the neural network model to be trained.
+    # - train_loader (DataLoader): The DataLoader object that provides the batches of
+    #   training feature vectors along with the corresponding target values.
+    # - test_loader (DataLoader): The DataLoader object that provides the batches of
+    #   testing feature vectors along with the corresponding target values.
+    # - criterion (callable): The optimization criterion (e.g., MSELoss) to be
+    #   minimized during training.
+    # - optimizer (torch.optim.Optimizer): The optimizer (e.g., Adam) used during
+    #   training to update model parameters.
+    # - epochs (int): The number of training epochs to be performed.
 
-    # Retrieve current figure and set its size (in inches)
-    fig = plt.gcf()
-    fig.set_size_inches(fig_width, fig_height)
+    # Output Arguments:
+    #  * Average scaled train loss (e.g., MSE)
+    #  * Average scaled train MAE
+    #  * Average scaled test loss (e.g., MSE)
+    #  * Average scaled test MAE
+    
+    # Initialize list containers for storing the training and testing loss and
+    # mean absolute error (MAE).
+    TRAIN_LOSS = []
+    TRAIN_MAE = []
+    TEST_LOSS = []
+    TEST_MAE = []
+    
+    # Indicate that the following operations pertain to the training process.
+    for epoch in range(epochs):
+        # Set the model in training mode.
+        model.train()
 
-    # Construct the full path and save the figure
-    full_path = os.path.join(figures_dir, filename)
-    plt.savefig(full_path, dpi=100, bbox_inches='tight')
-    
-# =============================================================================
-# This function provides a two-dimensiional plot of a dependent series object 
-# y as a function of the independent series object x.
-# =============================================================================
-def plot_series(df, series, day_min, day_max):
+        # Initialize accumulators for total loss and total MAE over each epoch.
+        total_loss = 0.0
+        total_mae = 0.0
 
-    # Validate day_min and day_max within dataset range
-    if not (1 <= day_min <= len(df)) or not (1 <= day_max <= len(df)):
-        raise ValueError("day_min and day_max must be within the range [1, len(dataset)].")
-    
-    # Convert day_min and day_max to index-based slicing
-    day_min_index = day_min - 1  # Convert to zero-based index
-    day_max_index = day_max  # Inclusive slicing
-    
-    # Filter DataFrame within the given index range
-    df_filtered = df.iloc[day_min_index:day_max_index]
-    
-    # Extract the x and y values
-    x = df_filtered['Date']
-    y = df_filtered[series]
-    
-    # Dynamically adjust figure size
-    num_points = len(x)
-    fig_width = max(12, num_points / 100)  
-    fig_height = 6
-    figsize = (fig_width, fig_height)
-    
-    plt.figure(figsize=figsize)
-    plt.style.use('dark_background')
-    
-    # Plot the data
-    title_str = f"{series} Prices Evolution"
-    plt.plot(x, y, marker='o', color='w', linestyle='-', linewidth=1.5, 
-             alpha=0.9)
-    
-    plt.xlabel('Date')
-    plt.ylabel(series)
-    plt.title(title_str)
-    plt.grid(color='gray', linestyle='--', linewidth=0.5)
-    plt.tight_layout()
-    
-    # Customize x-axis ticks dynamically
-    if num_points > 25:
-        tick_spacing = max(1, num_points // 25)
-        plt.xticks(ticks=x[::tick_spacing], rotation=45)
-    else:
-        plt.xticks(rotation=45)
-    
-    # Save the current figure after setting the name of the image file.
-    png_filename = f"{series}_time_evolution.png"
-    save_figure(png_filename)
-    
-    plt.show()
+        # Loop through the various training batches stored in the train_loader.
+        for X_batch, Y_batch in train_loader:
+            # Set to zero the gradient vector w.r.t. the model's parameters.
+            optimizer.zero_grad()
 
-# =============================================================================
-# This function performs Fourier Transform analysis on a time series to identify 
-# dominant periodicities. The dominant period is defined as:
-#                             1
-# Dominant Period = ------------------- 
-#                    Dominant Frequency
-#
-# Take into consideration that the negative frequency components are discarded 
-# since they constitute just the complex conjugates of the positive frequency 
-# components. Moreover, they do not provide additional insights, as they mirror 
-# the positive ones. More importantly, frequency f corresponds to a repeating 
-# pattern every 1/f time units. Since we work with real-valued time series, we 
-# focus only on the positive frequencies to extract meaningful periodicities.
-# =============================================================================
-def fourier_analysis(series, series_name, sampling_rate=1):
+            # Obtain the predictions of the model for the current training batch.
+            preds = model(X_batch)
+
+            # Compute the current loss for the model on this batch.
+            loss = criterion(preds, Y_batch)
+
+            # Perform the backward pass.
+            loss.backward()
+
+            # Update model parameters.
+            optimizer.step()
+
+            # Accumulate the loss.
+            total_loss += loss.item()
+
+            # Compute the MAE for this batch and accumulate it.
+            batch_mae = torch.mean(torch.abs(preds - Y_batch)).item()
+            total_mae += batch_mae
+
+        # Compute the average loss and average MAE for the current training epoch.
+        avg_train_loss = total_loss / len(train_loader)
+        avg_train_mae = total_mae / len(train_loader)
+
+        # Compute the average test loss and average test MAE after this epoch.
+        avg_test_loss, avg_test_mae = test_model(model, test_loader, criterion)
         
-    # Input Parameters:
-    # - series (pd.Series): Time series data indexed by DatetimeIndex.
-    # - sampling_rate (float): The rate at which data points are sampled (default: 1 per day).
+        # Store the accuracy metrics for the current batch.
+        TRAIN_LOSS.append(avg_train_loss)
+        TRAIN_MAE.append(avg_train_mae)
+        TEST_LOSS.append(avg_test_loss)
+        TEST_MAE.append(avg_test_mae)
 
-    # Output Parameters:
-    # - dominant_period (float): The estimated dominant periodicity.
-    # - freq (np.array): Array of frequency values.
-    # - magnitude (np.array): Magnitude of Fourier Transform at each frequency.
+        # Report the training and testing metrics every epoch.
+        print(
+            f"Epoch [{epoch+1}/{epochs}], "
+            f"Train Loss (scaled): {avg_train_loss:.6f}, "
+            #f"Train MAE (scaled): {avg_train_mae:.6f}, "
+            f"Test Loss (scaled): {avg_test_loss:.6f}, "
+            #f"Test MAE (scaled): {avg_test_mae:.6f}"
+            )
+        
+    return TRAIN_LOSS, TRAIN_MAE, TEST_LOSS, TEST_MAE
+
+
+# Define the function that performs the testing of the neural network model.
+def test_model(model, test_loader, criterion):
+
+    # Input Arguments:
+    # - model (nn.Module): The instance of the trained neural network model
+    #   to be evaluated.
+    # - test_loader (DataLoader): The DataLoader object that provides the batches
+    #   of testing feature vectors along with the corresponding target values.
+    # - criterion (callable): The optimization criterion (e.g., MSELoss) to be
+    #   evaluated on the test set.
+
+    # Output Arguments:
+    # - avg_test_loss (float): The average scaled loss (e.g., MSE) computed over
+    #   the entire test set.
+    # - avg_test_mae (float): The average scaled Mean Absolute Error computed
+    #   over the entire test set.
     
-    # Step 1: Detrend the time series (to remove long-term trends)
-    series_detrended = detrend(series.dropna())  # Remove trend
+
+    # Indicate that the following operations pertain to the testing process.
+    model.eval()
+
+    # Initialize a list to collect the test loss values for each testing batch.
+    test_losses = []
+    # Initialize an accumulator for total MAE.
+    total_mae = 0.0
+
+    # Perform the actual testing without computing gradients.
+    with torch.no_grad():
+        # Loop through the various testing batches stored in the test_loader.
+        for X_batch, Y_batch in test_loader:
+            # Obtain the predictions for the current testing batch.
+            preds = model(X_batch)
+
+            # Compute the current test loss.
+            loss = criterion(preds, Y_batch)
+
+            # Accumulate the loss for computing the average later.
+            test_losses.append(loss.item())
+
+            # Compute and accumulate the MAE for this batch.
+            batch_mae = torch.mean(torch.abs(preds - Y_batch)).item()
+            total_mae += batch_mae
+
+    # Compute the average test loss over all testing batches.
+    avg_test_loss = np.mean(test_losses)
+    # Compute the average test MAE over all testing batches.
+    avg_test_mae = total_mae / len(test_loader)
+
+    # Return the average test loss and MAE.
+    return avg_test_loss, avg_test_mae
     
-    # Step 2: Compute the FFT (Fourier Transform)
-    N = len(series_detrended)  # Number of observations
-    fft_values = np.fft.fft(series_detrended)  # Compute FFT
-    freq = np.fft.fftfreq(N, d=sampling_rate)  # Compute frequency bins
+# Define the function that returns all model predictions and respective actual
+# target values. 
+def get_predictions(model, data_loader):
     
-    # Step 3: Compute Magnitude Spectrum (Power Spectrum)
-    magnitude = np.abs(fft_values)  # Magnitude of FFT
+    # Input Arguments:
+    # model : The trained (or partially trained) PyTorch model.
+    # data_loader : A PyTorch DataLoader containing your dataset split, e.g. 
+    #               train or test.
+
+    # Output Arguments:
+    # all_preds : numpy.ndarray of shape (N, 1) storing model predictins for 
+    #             all samples in the loader.
+    # all_targets : numpy.ndarray of shape (N, 1) storing the ground-truth
+    #               (actual) targets for all samples in the loader.
     
-    # Step 4: Identify the Dominant Frequency
-    positive_frequencies = freq[:N//2]  # Keep only positive frequencies
-    positive_magnitudes = magnitude[:N//2]  # Corresponding magnitudes
-    
-    peak_index = np.argmax(positive_magnitudes)  # Find peak in the spectrum
-    dominant_frequency = positive_frequencies[peak_index]  # Get dominant frequency
-    
-    # Compute the dominant period (avoid division by zero)
-    dominant_period = 1 / dominant_frequency if dominant_frequency > 0 else np.nan
-    
-    # Step 5: Plot the Magnitude Spectrum
-    plt.figure(figsize=(10, 5))
-    plt.plot(positive_frequencies, positive_magnitudes, color='cyan', lw=2)
-    plt.axvline(dominant_frequency, color='red', linestyle='--', label=f"Dominant Freq: {dominant_frequency:.4f}")
-    plt.title("Frequency Spectrum (Fourier Transform)")
-    plt.xlabel("Frequency (cycles per unit time)")
-    plt.ylabel("Magnitude")
-    plt.legend()
-    plt.grid()
-    
-    # Save the current figure after setting the name of the image file.
-    png_filename = f"{series_name}_fourier_spectrum.png"
-    save_figure(png_filename)
-    plt.show()
-    
-    print(f"Dominant Period: {dominant_period:.2f} time units")
-    
-    return dominant_period, positive_frequencies, positive_magnitudes
+
+    # Put the model into evaluation mode (disable dropout, etc.)
+    model.eval()
+
+    # Lists to collect predictions and targets from each batch
+    all_preds = []
+    all_targets = []
+
+    with torch.no_grad():
+        for X_batch, Y_batch in data_loader:
+            # Forward pass
+            preds = model(X_batch)
+
+            # Move everything to CPU, then convert to NumPy
+            all_preds.append(preds.cpu().numpy())
+            all_targets.append(Y_batch.cpu().numpy())
+
+    # Concatenate all batch results into a single NumPy array
+    all_preds = np.concatenate(all_preds, axis=0)
+    all_targets = np.concatenate(all_targets, axis=0)
+
+    return all_preds, all_targets
 
 
 # ============================================================================= 
 #                   MAIN CODE SECTION:
 # =============================================================================
 
-# =============================================================================
-# IMPORTANT NOTE: KEEP IN MIND THAT THE IMPLEMENTED VISUALIZATION PROCESS IS
-#                 ONLY MEENINGFULL FOR MULTI-SERIES DATAFRAMES WHERE A GIVEN
-#                 TARGET REGRESSION VARIABLE IS CONSIDERED ALONG THE NON-LAGGED
-#                 VERSION OF THE REST INDEPENDENT REGRESSION VARIABLES. 
-# =============================================================================
-
-
 # ============================================================================= 
-# Load Main Dataframe.
+# Step 1: Load and preprocess data
 # =============================================================================
 
 # Set the name of the data directory.
 data_directory = './data'
-data_file = 'MSFT_multi_time_series_data.csv'
+# The files that can be used are either the XXXX_time_series_data.csv which 
+# contain as features lagged versions of only the target regression variable
+# or XXXX_multi_time_series_data.csv which contain as features lagged versions
+# of all the available data variables.
+data_file = 'MSFT_time_series_data.csv'
 
-# Construct the f ull data path
+# Construct the full data path
 data_path = os.path.join(data_directory,data_file)
 
 # Load the DataFrame from the CSV file
-dataset = pd.read_csv(data_path)
+df = pd.read_csv(data_path)
 
-# Get the time span of the given dataset in days.
-days_num = len(dataset)
+# Drop Date column
+df = df.drop(columns=['Date'])
 
-# Report the time span of the given dataset.
-print(f"Dataset spans a time period of {days_num} days")
+# Separate target regression variables from features. In the context of this
+# implementation each data file stores the target regression variable as the 
+# first series object in the respective dataframe.
+target_col = df.columns[0]
+X = df.drop(columns=[target_col]).values  # shape: (N, num_features)
+Y = df[target_col].values                 # shape: (N,) 
+
+# Perform training / testing splitting at this point to avoid data leakage 
+# during scaling
+train_ratio = 0.8
+n_train = int(len(X) * train_ratio)
+X_train_raw, X_test_raw = X[:n_train], X[n_train:]
+Y_train_raw, Y_test_raw = Y[:n_train], Y[n_train:]
+
+# Scale independent regression variables stored as X.
+x_scaler = StandardScaler() # MinMaxScaler(feature_range=(0, 1))
+X_train_scaled = x_scaler.fit_transform(X_train_raw)
+X_test_scaled  = x_scaler.transform(X_test_raw)
+
+# Scale dependebt regression variables stored as Y ensuring that the respective
+# numpy arrays are 2-dimensional before scaling.
+y_scaler = StandardScaler() # MinMaxScaler(feature_range=(0, 1))
+Y_train_scaled = y_scaler.fit_transform(Y_train_raw.reshape(-1, 1))
+Y_test_scaled  = y_scaler.transform(Y_test_raw.reshape(-1, 1))
 
 # ============================================================================= 
-# Visualize Time Series Dataset in the Time Domain.
+# Step 2: Create Datasets & DataLoaders
 # =============================================================================
 
-# Plot the first 300 days of observations for each series.
-day_min, day_max = 1, 300
+# Get the execution device to be used for training and testing the model.
+device = get_execution_device()
 
-# Loop through the various series objects and plot the time evolution of the
-# numeric data variables for the previously defined time period of days.
+# Set the batch size to be used during training and testing.
+batch_size = 32
 
-# =============================================================================
-# IMPORTANT NOTE: WE NEED TO KEEP ALL THE NON-LAGGED VERSIONS OF THE RESPECTIVE
-#                 SERIES OBJECTS. THAT IS THE VISUALIZATION PROCESS WILL ONLY 
-#                 FOCUS ON THE SERIES OBJECTS AT TIME t = 0.
-# ============================================================================= 
+train_dataset = TimeSeriesDataset(X_train_scaled, Y_train_scaled, device=device)
+test_dataset  = TimeSeriesDataset(X_test_scaled, Y_test_scaled, device=device)
 
-
-numeric_columns = dataset.columns[dataset.dtypes != "object"]
-non_lagged_columns =  [col for col in numeric_columns if col.endswith("_t-0")]
-for series in non_lagged_columns:
-    plot_series(dataset,series,day_min,day_max)
+train_loader = DataLoader(train_dataset, batch_size=len(train_dataset), shuffle=False)
+test_loader  = DataLoader(test_dataset, batch_size=len(test_dataset), shuffle=False)
 
 # ============================================================================= 
-# Visualize Time Series Dataset in the Frequency Domain.
+# Step 3: Model Definition
 # =============================================================================
 
-# Initialize list containers for storing the dominant period, the positive 
-# frequencies and the corresponding magnitudes.
-DominantPeriods = []
-PositiveFrequencies = []
-PositiveMagnitudes = []
+# Get the dimensionality of the input features.
+input_dim = X_train_scaled.shape[1]
 
-# Loop through the various series objects and plot the frequency spectrogram of 
-# the numeric data variables for the previously defined time period of days.
-for series in non_lagged_columns:
-    dominant_period, pos_freq, pos_mag = fourier_analysis(dataset[series], series)
-    DominantPeriods.append(dominant_period)
-    PositiveFrequencies.append(pos_freq)
-    PositiveMagnitudes.append(pos_mag)
+# Define the number of neurons per hidden layer of the network.
+hidden_layers =  [128,64,32,16]
 
-# The visualization involves independently understanding each attribute of the
-# dataset. We will look at the scatterplot and the correlation matrix. These 
-# plots give us a sense of the interdependence of the data. Correlation can be 
-# calculated and displayed for each pair of the variables by creating a 
-# correlation matrix. Hence, besides the relationship between independent and 
-# dependent variables, it also shows the correlation among the independent  
-# variables. 
+# Instantiate the feed forward neural network object.
+# model = MLP(input_dim, hidden_layers).to(device)
 
+# Instantiate the linear network object.
+model = LinearNN(input_dim).to(device)
 
-# Create a copy of the dataset excluding the datetime series and all the lagged
-# versions of the dependent and independent regression variables so that the 
-# pairwise correlations may be computed and are meaningful.
-df = dataset.filter(items=non_lagged_columns)
+# ============================================================================= 
+# Step 4: Loss and Optimizer Definition
+# =============================================================================
 
-# Compute the pairwise correlations amongst the selected data series.
-correlation = df.corr()
+criterion = nn.MSELoss()
+optimizer = optim.Adam(model.parameters(), lr=1e-3)
 
+# ============================================================================= 
+# Step 5: Model Training and Testing
+# =============================================================================
 
-# Generate the respective heam map of correlations.
-plt.figure(figsize=(15,15))
-plt.title('Correlation Matrix')
-sns.heatmap(correlation, vmax=1, square=True,annot=True,cmap='cubehelix')
-# Save and show
-save_figure("correlation_matrix.png",fig_width=15, fig_height=15)
-plt.show()
+# Set the number of training epochs.
+epochs =  1000
 
+# Perform the actual training process.
+TRAIN_LOSS, TRAIN_MAE, TEST_LOSS, TEST_MAE = train_model(model, 
+                                                         train_loader, 
+                                                         test_loader, 
+                                                         criterion, 
+                                                         optimizer, 
+                                                         epochs)
+# Plot the training and testing history.
+plot_training_history(TRAIN_LOSS, TRAIN_MAE, TEST_LOSS, TEST_MAE)
 
-# Visualize the pairwise scatter plots for the variables pertaining to the 
-# given regression task.
-plt.figure(figsize=(15,15))
-scatter_matrix(df,figsize=(15,15))
-# Save and show
-save_figure("scatter_matrix.png",fig_width=12, fig_height=12)
-plt.show()
+# Get predictions for the training set.
+train_preds, train_actuals = get_predictions(model, train_loader)
+
+# Get predictions for the testing set.
+test_preds, test_actuals = get_predictions(model, test_loader)
+
+# Obtain the unscaled versions of the training and testing predictions and 
+# corresponding ground truth values. If the respective numpy arrays are shaped 
+# (N,) they must be reshaped to (N,1) before using inverse_transform.
+train_preds_unscaled = y_scaler.inverse_transform(train_preds.reshape(-1, 1))
+train_actuals_unscaled = y_scaler.inverse_transform(train_actuals.reshape(-1, 1))
+test_preds_unscaled = y_scaler.inverse_transform(test_preds.reshape(-1, 1))
+test_actuals_unscaled = y_scaler.inverse_transform(test_actuals.reshape(-1, 1))
+
+# Plot the actual and predicted target regression values utilizing the unscaled
+# versions of the data.
+plot_predictions(train_preds_unscaled, train_actuals_unscaled, 
+                 test_preds_unscaled, test_actuals_unscaled)
