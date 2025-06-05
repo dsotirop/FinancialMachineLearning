@@ -33,8 +33,9 @@ from torch.utils.data import Dataset, DataLoader
 from torch import nn
 import torch.optim as optim
 import numpy as np
-from auxiliary.utils import get_execution_device, plot_predictions, plot_training_history
-
+from auxiliary.utils import get_execution_device, plot_predictions
+from auxiliary.utils import plot_training_history, report_model_parameters
+from auxiliary.utils import visualize_model_weights
 # ============================================================================= 
 #                   CLASSES DEFINITION SECTION:
 # =============================================================================
@@ -317,7 +318,7 @@ data_directory = './data'
 # contain as features lagged versions of only the target regression variable
 # or XXXX_multi_time_series_data.csv which contain as features lagged versions
 # of all the available data variables.
-data_file = 'MSFT_time_series_data.csv'
+data_file = 'IBM_time_series_data.csv'
 
 # Construct the full data path
 data_path = os.path.join(data_directory,data_file)
@@ -361,7 +362,7 @@ Y_test_scaled  = y_scaler.transform(Y_test_raw.reshape(-1, 1))
 device = get_execution_device()
 
 # Set the batch size to be used during training and testing.
-batch_size = 32
+# batch_size = 32
 
 train_dataset = TimeSeriesDataset(X_train_scaled, Y_train_scaled, device=device)
 test_dataset  = TimeSeriesDataset(X_test_scaled, Y_test_scaled, device=device)
@@ -380,10 +381,10 @@ input_dim = X_train_scaled.shape[1]
 hidden_layers =  [128,64,32,16]
 
 # Instantiate the feed forward neural network object.
-# model = MLP(input_dim, hidden_layers).to(device)
+model = MLP(input_dim, hidden_layers).to(device)
 
 # Instantiate the linear network object.
-model = LinearNN(input_dim).to(device)
+# model = LinearNN(input_dim).to(device)
 
 # ============================================================================= 
 # Step 4: Loss and Optimizer Definition
@@ -427,3 +428,13 @@ test_actuals_unscaled = y_scaler.inverse_transform(test_actuals.reshape(-1, 1))
 # versions of the data.
 plot_predictions(train_preds_unscaled, train_actuals_unscaled, 
                  test_preds_unscaled, test_actuals_unscaled)
+
+# ============================================================================= 
+# Step 6: Report Model Parameters & Visualize Weigtht Parameters
+# =============================================================================
+report_model_parameters(model)
+visualize_model_weights(model)
+
+# We may visualize distinct layers as:
+# visualize_model_weights(model.network[0])
+# visualize_model_weights(model.network[3]) 
