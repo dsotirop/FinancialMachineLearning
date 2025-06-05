@@ -10,6 +10,8 @@ from sklearn.cluster import KMeans
 from sklearn.metrics.pairwise import pairwise_distances
 from sklearn.preprocessing import StandardScaler
 import scipy.stats as stats
+import math
+import seaborn as sns
 # ============================================================================= 
 #                   HELPER FUNCTIONS DEFINITION SECTION:
 # =============================================================================
@@ -293,5 +295,115 @@ def plot_predictions(train_preds, train_actuals, test_preds,  test_actuals):
     plt.ylabel("Value")
     plt.legend()
     plt.grid(color='gray', linestyle='--', linewidth=0.5)
+    plt.tight_layout()
+    plt.show()
+   
+# This function reports the names, shapes, and total count of learnable 
+# parameters in a PyTorch model.    
+def report_model_parameters(model):
+    
+    # Input Arguments:
+    # -----------
+    # model : torch.nn.Module
+    #         The PyTorch neural network model whose parameters will be inspected.
+
+    # Output Arguments:
+    # --------
+    # None
+    print("Model Parameters:")
+    
+    total_params = 0  # Counter for the total number of learnable parameters
+
+    # Loop over all named parameters of the model
+    for name, param in model.named_parameters():
+        shape = tuple(param.shape)  # Get the shape as a tuple
+        count = param.numel()       # Get the number of elements in the tensor
+        total_params += count       # Accumulate total parameter count
+        print(f"{name:40s} -> {shape}")
+
+    print(f"\nTotal number of learnable parameters: {total_params}")
+
+# This function visualizes 2D weight matrices (not biases) from a PyTorch 
+# Feedforward or LSTM model. 
+def visualize_model_weights(model, max_dim = 256, annotate = False):
+    
+    # Input Arguments:
+    # -----------
+    # model : torch.nn.Module
+    #         A trained PyTorch model (e.g., feedforward or LSTM).
+    #
+    # max_dim : int
+    #    Maximum allowed size of weight matrices in either dimension for visualization.
+    #
+    # annotate : bool
+    #    If True, display numerical values in the heatmap (only useful for small matrices).
+
+    # Output Arguments:
+    # --------
+    # None
+    #    The function displays Seaborn heatmaps of weight matrices for inspection.
+    
+    # Set up dark background style
+    plt.style.use('dark_background')
+    sns.set_theme(style="dark", rc={
+        "axes.facecolor": "#111111",
+        "figure.facecolor": "#111111",
+        "axes.edgecolor": "#555555",
+        "axes.labelcolor": "#dddddd",
+        "xtick.color": "#cccccc",
+        "ytick.color": "#cccccc",
+        "text.color": "#ffffff",
+        "axes.titlecolor": "#ffffff"
+    })
+
+    # Extract 2D weight matrices only
+    weights = [(name, param) for name, param in model.named_parameters()
+               if "weight" in name and param.dim() == 2]
+
+    if not weights:
+        print("No 2D weight matrices found in model.")
+        return
+
+    # Layout for subplots
+    num = len(weights)
+    cols = min(3, num)
+    rows = math.ceil(num / cols)
+    fig, axes = plt.subplots(rows, cols, figsize=(6 * cols, 5 * rows), facecolor="#111111")
+    axes = axes.flatten() if num > 1 else [axes]
+
+    for i, (name, param) in enumerate(weights):
+        w = param.detach().cpu().numpy()
+
+        if w.shape[0] > max_dim or w.shape[1] > max_dim:
+            axes[i].set_title(f"{name} (skipped)")
+            axes[i].axis('off')
+            continue
+
+        # Z-score normalization: (W - mean) / std
+        mean, std = np.mean(w), np.std(w)
+        if std > 0:
+            w_norm = (w - mean) / std
+        else:
+            w_norm = np.zeros_like(w)
+
+        # Clip z-scores to [-2, 2] to avoid outlier dominance
+        w_clipped = np.clip(w_norm, -2, 2)
+
+        # Normalize to [0, 1] after clipping for consistent colormap mapping
+        w_final = (w_clipped + 2) / 4  # [-2,2] → [0,1]
+
+        # Use perceptually uniform colormap suited for dark backgrounds
+        sns.heatmap(w_final, ax=axes[i], cmap="viridis", cbar=True,
+                    vmin=0, vmax=1, annot=annotate, fmt=".2f",
+                    linewidths=0.05, linecolor='#222222')
+
+        axes[i].set_title(name)
+        axes[i].set_xlabel("Input Features")
+        axes[i].set_ylabel("Output Units")
+
+    # Turn off unused axes
+    for j in range(i + 1, len(axes)):
+        axes[j].axis('off')
+
     plt.tight_layout()
     plt.show()
